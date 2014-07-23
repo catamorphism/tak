@@ -14,9 +14,9 @@
         ]).
 
 %% SSL connection helper functions
--export([chain_to_ssl_options/1
-        ,pin_to_ssl_options/1
-        ,pem_to_ssl_options/1
+-export([chain_to_ssl_options/2
+        ,pin_to_ssl_options/2
+        ,pem_to_ssl_options/2
         ]).
 
 %% SSL Callback function.
@@ -33,14 +33,17 @@
 -type pin() :: {CACert::cert(),
                 PinnedCert::cert()}.
 -type ssl_options() :: [ssl:ssl_option()].
+%% Options to pass to tak: the certificate to pin,
+%% and a boolean saying whether or not to ignore expired certificates
+-record (options, { cert :: term(), ignore_expired_certificates :: boolean() }).
 
 %%====================================================================
 %% API
 %%====================================================================
 
--spec pem_to_ssl_options(pem_data()) -> ssl_options().
-pem_to_ssl_options(Pem) ->
-    chain_to_ssl_options(pem_to_cert_chain(Pem)).
+-spec pem_to_ssl_options(pem_data(), boolean()) -> ssl_options().
+pem_to_ssl_options(Pem, IgnoreExpiredCerts) ->
+    chain_to_ssl_options(pem_to_cert_chain(Pem), IgnoreExpiredCerts).
 
 -spec pem_to_cert_chain(pem_data()) -> cert_chain().
 pem_to_cert_chain(Pem) ->
@@ -51,14 +54,14 @@ pem_to_certs(Pem) ->
      || {'Certificate', Cert, not_encrypted}
             <- public_key:pem_decode(iolist_to_binary(Pem)) ].
 
--spec chain_to_ssl_options(cert_chain()) -> [ssl:ssl_option()].
-chain_to_ssl_options(CertChain) ->
-    pin_to_ssl_options(pin(CertChain)).
+-spec chain_to_ssl_options(cert_chain(), boolean()) -> [ssl:ssl_option()].
+chain_to_ssl_options(CertChain, IgnoreExpiredCerts) ->
+    pin_to_ssl_options(pin(CertChain), IgnoreExpiredCerts).
 
-pin_to_ssl_options({CACert, PinCert}) ->
+pin_to_ssl_options({CACert, PinCert}, IgnoreExpiredCerts) when is_boolean(IgnoreExpiredCerts) ->
     CADer = public_key:pkix_encode('OTPCertificate', CACert, otp),
     [{cacerts, [CADer]},
-     {verify_fun, {fun verify_pin/3, PinCert}}].
+     {verify_fun, {fun verify_pin/3, #options{ cert = PinCert, ignore_expired_certificates = IgnoreExpiredCerts }}}].
 
 
 %%====================================================================
@@ -120,20 +123,22 @@ issuer(Cert) ->
                {'extension', term()} |
                valid |
                valid_peer,
-      InitialUserState :: term().
-verify_pin(PinCert, valid_peer, PinCert) ->
+      InitialUserState :: options.
+verify_pin(PinCert, valid_peer, #options{cert = PinCert}) ->
     {valid, PinCert};
 %% It's OK if the pinned certificate is expired, so long as
-%% the certificates match
-verify_pin(PinCert, {bad_cert, cert_expired}, PinCert) ->
+%% the certificates match and we've enabled the ignore_expired_certificates flag
+verify_pin(PinCert,
+           {bad_cert, cert_expired},
+           #options{cert = PinCert, ignore_expired_certificates = true}) ->
     {valid, PinCert};
-verify_pin(_Cert, {extension, _}, PinCert) ->
+verify_pin(_Cert, {extension, _}, #options{cert = PinCert}) ->
     {unknown, PinCert};
-verify_pin(_Cert, {bad_cert, _} = Reason, _PinCert) ->
+verify_pin(_Cert, {bad_cert, _} = Reason, #options{cert = _PinCert}) ->
     {fail, Reason};
-verify_pin(_Cert, valid, PinCert) ->
+verify_pin(_Cert, valid, #options{cert = PinCert}) ->
     {valid, PinCert};
-verify_pin(SomeRandomCert, valid_peer, PinCert) ->
+verify_pin(SomeRandomCert, valid_peer, #options{cert = PinCert}) ->
     {fail, {peer_cert_differs_from_pinned,
             subject(SomeRandomCert),
             subject(PinCert)}}.
