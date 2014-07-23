@@ -123,6 +123,10 @@ issuer(Cert) ->
       InitialUserState :: term().
 verify_pin(PinCert, valid_peer, PinCert) ->
     {valid, PinCert};
+%% It's OK if the pinned certificate is expired, so long as
+%% the certificates match
+verify_pin(PinCert, {bad_cert, cert_expired}, PinCert) ->
+    {valid, PinCert};
 verify_pin(_Cert, {extension, _}, PinCert) ->
     {unknown, PinCert};
 verify_pin(_Cert, {bad_cert, _} = Reason, _PinCert) ->
